@@ -1,0 +1,106 @@
+#include <msp430.h>
+#include "libTimer.h"
+#include "buzzer.h"
+
+#define LED_RED BIT0
+#define LED_GREEN BIT6
+#define LEDS (BIT0 | BIT6)
+
+#define SW1 BIT3
+#define SWITCHES SW1
+
+volatile char interrupted = 0;
+
+void delay(unsigned int d) {
+  while (d--) {
+    __delay_cycles(2000);  // ~1ms per loop (2MHz)
+  }
+}
+
+void play_interrupt_tone() {
+  buzzer_set_period(4000);   // Lower tone (~500Hz)
+  P1OUT |= LED_RED;
+  delay(1500);               // 1.5 seconds
+  buzzer_set_period(0);
+  P1OUT &= ~LED_RED;
+}
+
+int play_main_sequence(int toneStart, int maxTones) {
+  int buzzerSound = toneStart;
+  int delayTime = 2000;
+  int i;
+
+  for (i = 0; i < maxTones && !interrupted; i++) {
+    P1OUT |= LED_GREEN;
+    buzzer_set_period(buzzerSound);
+    delay(delayTime);
+
+    buzzer_set_period(0);
+    P1OUT &= ~LED_GREEN;
+    delay(delayTime / 2);
+
+    buzzerSound += 2000;
+
+    if (i % 4 == 0 && i != 0) {
+      buzzerSound -= 500;
+      delay(delayTime / 2);
+      buzzer_set_period(0);
+      delay(delayTime);
+    }
+  }
+
+  buzzer_set_period(0);
+  P1OUT &= ~LED_GREEN;
+
+  return i; // return how many tones were played
+}
+
+void switch_interrupt_handler() {
+  char p1val = P1IN;
+
+  P1IES |= (p1val & SWITCHES);
+  P1IES &= (p1val | ~SWITCHES);
+
+  if (!(p1val & SW1)) {
+    interrupted = 1;
+  }
+}
+
+void __interrupt_vec(PORT1_VECTOR) Port_1() {
+  if (P1IFG & SWITCHES) {
+    P1IFG &= ~SWITCHES;
+    switch_interrupt_handler();
+  }
+}
+
+int main() {
+  configureClocks();
+  buzzer_init();
+
+  P1DIR |= LEDS;
+  P1OUT &= ~LEDS;
+
+  P1REN |= SWITCHES;
+  P1IE  |= SWITCHES;
+  P1OUT |= SWITCHES;
+  P1DIR &= ~SWITCHES;
+
+  or_sr(0x8);  // Enable global interrupts
+
+  int totalCount = 0;
+
+  while (totalCount < 20) {
+    interrupted = 0;
+    int played = play_main_sequence(2000, 20 - totalCount);
+    totalCount += played;
+
+    if (interrupted) {
+      play_interrupt_tone();
+    }
+  }
+
+  buzzer_set_period(0);
+  P1OUT &= ~LEDS;  // turn everything off
+
+  or_sr(0x18); // CPU off, GIE on
+}
